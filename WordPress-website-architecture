@@ -1,0 +1,17 @@
+- Build a Three-Tier AWS Network VPC from Scratch
+- Create Internet Gateway and associated it to the vpc
+- Create 2 public subnets for webserver, 2 private subnets for appserver, 2 private subnets for dataserver. 
+- Create 1 public route table and 1 private route table. public subnets will be associated to public RT. private subnets will be associated to private RT
+- Create Nat Gateways on public subnets and associated then to private appservers.
+- Create the Security Groups: alb-security-group, webserver-security-group, appserver-security-group,databaseserver-security-group
+- Create the RDS Instance
+- Create the Elastic File System (EFS)
+- Install WordPress
+- Create an Application Load Balancer
+- Register a New Domain Name in Route 53
+- Create a Record Set in Route 53
+- Register for an SSL Certificate in AWS Certificate Manager
+- SSH into Instance in the Private Subnet
+- Create an HTTPS Listener for the Application Load Balancer
+- Create an Auto Scaling Group
+- Install WordPress Theme and Template
