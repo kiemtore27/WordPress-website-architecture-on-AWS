@@ -1,17 +1,201 @@
-- Build a Three-Tier AWS Network VPC from Scratch
+#### Build a Three-Tier AWS Network architecture for our wordpress website project
+- create vpc named Dev-vpc with cidr 10.0.0.0/16
 - Create Internet Gateway and associated it to the vpc
-- Create 2 public subnets for webserver, 2 private subnets for appserver, 2 private subnets for dataserver. 
-- Create 1 public route table and 1 private route table. public subnets will be associated to public RT. private subnets will be associated to private RT
-- Create Nat Gateways on public subnets and associated then to private appservers.
-- Create the Security Groups: alb-security-group, webserver-security-group, appserver-security-group,databaseserver-security-group
+
+- Create 2 public-web-subnets on AZ1a with cidr 10.0.0.0/24 and on AZ1b with cidr 10.0.1.0/24 . 
+Then we will enable auto-assign ipv4 setting for each of public subnets. WHY? because at anytime we launch ec2 instances in these public subnets , they (ec2s) will automatically get ips.
+
+- Create public route table.Then we will add public route to the route table . This public route will help RT routes traffic flow to the internet so destination will be 0.0.0.0/0 and target will be my internetgateway address.... we will associate the public subnets previously created to the Route Tables.
+- Create 2 private-app-subnets on az1a with cidr 10.0.2.0/24 and az1b with cidr10.0.4.0/24  . 
+2 private-Data-subnets on az1a with cidr  10.0.3.0/24 and az1b with cidr 10.0.5.0/24. 
+
+-  Create Nat-Gateway-az1a on public-web-subnet-az1a ,
+we will allocate Elastic IP (EIP) to our nat-gateway in order to have static IP address whenever an instance is launched on those subnets.
+- Create private-route-table-az1a. we will add route to private-Route-Table in order to manage traffic flow to the internet through nat-gateway-az1a in public-web-subnet-az1a. So destination will be 0.0.0.0/0(internet address) and target will be nat-gateway-az1a.     
+private-app-subnet-az1a and private-data-subnet-az1a will be associated to private-Route-Table-az1a... 
+
+
+- Create Nat-Gateway-az1b on public-web-subnet-az1b,
+ we will allocate Elastic IP (EIP) to our nat-gateway in order to have static IP address whenever an instance is launched on those subnets.
+ - Create private-route-table-az1b. we will add route to private-Route-Table in order to manage traffic flow to the internet through nat-gateway-az1b in public-web-subnet-az1b. So destination will be 0.0.0.0/0 (internet address) and target will be nat-gateway-az1b.      
+ private-app-subnet-az1b private-data-subnet-az1b will be associated to private-Route-Table-az1b.
+   
+- Create the Security Groups: 
+
+1-ALB-security-group: the protocols will be http and https. we will open the port 80 for http and port 443 for https. the source will be 0.0.0.0/0 (internet). 
+It will act as a virtual firewall. So It will manage traffic flow coming from the INTERNET.  
+
+2-SSH-security-group: protocol= ssh , port=22 , source= my IP address. 
+It will limits the traffic to my ip address.
+
+3-Webserver-security-group: http and https ports: 80 and 443  source= ALB-security-group
+                             ssh port: 22           source= SSH-security-group 
+  webserver-sec-g will be added to our private-app-subnets. It will will play a virtual firewall role. So It will manage traffic flow coming from the LOAD BALANCER or alb-security-group and ssh-security-group.  
+
+4-Database-security-group: protocol= mysql/aurora, port=3306   source= Webserver-security-group
+ It will be added to private-data-subnets. It will play a virtual firewall role. So It will manage traffic flow coming from private-app-subnets or webserver-security-group.
+
+5-EFS-security-group: protocol= NFS    ports= 2049     source= webserver-security-group and EFS-security-group.
+It will be added to EFS. It will act as a virtual firewall. So It will manage traffic flow coming from webserver-security-group and efs-security group.
+
 - Create the RDS Instance
+1st in rds console we will create DB subnets group named "database-subnet-group".
+In "database-subnet-group" we will group { private-data-subnet-az1a and private-data-subnet-az1b}.
+once the group is created we will now create the RDS.
+
+Database creation methode= standard create. Engine type = MYSQL. version=MYSQL 5.7.36. Template= Dev/Test . Availability and durability = Multi-AZ DB Instance (master DB and Standby DB) OR Single DB Instance(master DB). DB Instance identifier=dev-rds-db. master username=davidk master password=davidk123. DB Instance class= {Burstable classes, db.t2.micro. enable: Include previous generation classes}. storage leave as default. connectivity= select dev-vpc. subnet group= database-subnet-group. public access=NO.  VPC security group=Database-security-group. Availability Zone for MasterDB=us-east-1b. Database authentication= check password authentication.
+Expend Additional configuration:
+Database name=applicationDB...  we will leave the rest as default. then CREATE
+
+
 - Create the Elastic File System (EFS)
+We will create EFS with mount target in each AZ in the same vpc. the webservers will use the mount targets to connect to EFS.
+In EFS console, click on customize. efs name= dev-efs. then leave the rest as default till encryption where we can disable so we can't get charge or leave it enable then we will get charge. CLICK NEXT.
+Under Network access,select Dev-vpc. under mount targets, select az1a and az1b, then private-data-subnets az1a and az1b, then EFS-security-goup for az1a and az1b.
+For File system policy we will leave as default.... review and click create.
+
+- Create ec2 instance (free tier) where we will install wordpress.
+name= Setup-Server on Dev-vpc on public-subnet-az1a, keypair: ec2key
+security groups: SSH-security-group, ALB-security-group, webserver-security-group
+
 - Install WordPress
+#1. create the html directory and mount the efs to it
+sudo su
+yum update -y
+mkdir -p /var/www/html
+sudo mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport fs-03c9b3354880b36a6.efs.us-east-1.amazonaws.com:/ /var/www/html
+# always keep in mind to update the EFS mount address 
+
+
+#2. install apache 
+sudo yum install -y httpd httpd-tools mod_ssl
+sudo systemctl enable httpd 
+sudo systemctl start httpd
+
+
+#3. install php 7.4
+sudo amazon-linux-extras enable php7.4
+sudo yum clean metadata
+sudo yum install php php-common php-pear -y
+sudo yum install php-{cgi,curl,mbstring,gd,mysqlnd,gettext,json,xml,fpm,intl,zip} -y
+
+
+#4. install mysql5.7
+sudo rpm -Uvh https://dev.mysql.com/get/mysql57-community-release-el7-11.noarch.rpm
+sudo rpm --import https://repo.mysql.com/RPM-GPG-KEY-mysql-2022
+sudo yum install mysql-community-server -y
+sudo systemctl enable mysqld
+sudo systemctl start mysqld
+
+
+#5. set permissions
+sudo usermod -a -G apache ec2-user
+sudo chown -R ec2-user:apache /var/www
+sudo chmod 2775 /var/www && find /var/www -type d -exec sudo chmod 2775 {} \;
+sudo find /var/www -type f -exec sudo chmod 0664 {} \;
+chown apache:apache -R /var/www/html 
+
+
+#6. download wordpress files
+wget https://wordpress.org/latest.tar.gz
+tar -xzf latest.tar.gz
+cp -r wordpress/* /var/www/html/
+
+
+#7. create the wp-config.php file
+cp /var/www/html/wp-config-sample.php /var/www/html/wp-config.php
+
+
+#8. edit the wp-config.php file
+nano /var/www/html/wp-config.php
+### this command will allow us to edit the file:
+# "DB_NAME" 'applicationDB'
+# "DB_USER" master user 'davidk'
+# " DB_PASSWORD" 'davidk123'
+# " DB_HOST" rds endpoint address 'dev-rds-db.cu2idoemakwo.us-east-1.rds.amazonaws.com'
+
+
+#9. restart the webserver
+service httpd restart
+
 - Create an Application Load Balancer
+we will create ALB to route traffic toward our ec2 instances located in private-app-subnets az1a and az1b.... 
+- Before creating the alb, 1st for all we will LAUNCH one ec2 instance called ec2-az1a on private-app-subnet-az1a and an other one called ec2-az1b on private-app-subnet-az1b.
+In security group section we will select the existing one called webserver-security-group
+In the metadata section in our ec2 instances we will past the following commands
+#!/bin/bash
+yum update -y
+sudo yum install -y httpd httpd-tools mod_ssl
+sudo systemctl enable httpd 
+sudo systemctl start httpd
+sudo amazon-linux-extras enable php7.4
+sudo yum clean metadata
+sudo yum install php php-common php-pear -y
+sudo yum install php-{cgi,curl,mbstring,gd,mysqlnd,gettext,json,xml,fpm,intl,zip} -y
+sudo rpm -Uvh https://dev.mysql.com/get/mysql57-community-release-el7-11.noarch.rpm
+sudo rpm --import https://repo.mysql.com/RPM-GPG-KEY-mysql-2022
+sudo yum install mysql-community-server -y
+sudo systemctl enable mysqld
+sudo systemctl start mysqld
+echo "fs-03c9b3354880b36a6.efs.us-east-1.amazonaws.com:/ /var/www/html nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 0 0" >> /etc/fstab
+mount -a
+chown apache:apache -R /var/www/html
+sudo service httpd restart
+# always keep in mind to update the EFS mount address if needed
+
+ NEXT, we will create a TARGET GROUP then we will put ec2-az1a and ec2-az1b in this group to allow the ALB to route traffic to those ec2 instances. So in ec2 instance console ,under the load balancing section, select target group then create it... target group name = Dev-tg. leave the rest as default till vpc section where we select our Dev-vpc . under heath checks select advanced settings then leave the rest as default till success codes where we add 200, 301,302 .
+  NEXT ... Under Register Targets select ec2-az1a and ec2-az1b where we want our ALB to route the traffic to. when desired instances are selected click in " Include as pending below" then scroll down then create TG.
+# We can now create the ALB.
+ALB name= Dev-ALB. we will leave the rest as default till vpc where we select our Dev-vpc.
+under mappings: select us-east-1a then select again Public-subnet-az1a 
+                again select us-east-1b then Public-subnet-az1b
+under security group: select ALB-security-group
+under listeners and routing: select Dev-TG      then scroll down and select create.
+we will "copy the DNS name"  in description section and past it in the internet browser to access our website. 
+In order to change our wordpress address COPY our "DNS name/wp-admin" we will be reedirected to wordpress webpage then we enter our credentials .then go to setting , select general and delete ip address url and past the alb DNS name url. then save. next we will sign out then sign in again . once we are able to sign out and in. we can now go to ec2 console and TERMINATE our Setup-Server instance.
+
 - Register a New Domain Name in Route 53
 - Create a Record Set in Route 53
+select Host-Zones then click on our created domain name weblabskiem.ml in order to create a record.
+record name/subdomain= www.             domain name: weblabskiem.ml
+record type= route traffic to an ip and some aws resources
+enable Alias then select Alias to Application and Classic Load Balancer
+region=us-east-1
+choose load balancer:dualstack.Dev-ALB-4-2ec2s-1382144172.us-east-1.elb.amazonaws.com
+then create record.
+past www.weblabskiem.ml in the browser to access to our wordpress website. 
+In order to change our wordpress address COPY our "www.weblabskiem.ml/wp-admin" we will be reedirected to wordpress webpage then we enter our credentials .then go to setting , select general delete the alb http://DNS name url and past http:// www.weblabskiem.ml url
+
 - Register for an SSL Certificate in AWS Certificate Manager
-- SSH into Instance in the Private Subnet
+we will register for a free ssl certificat in aws certificat manager. Then we will use the ssl certificat to encrypt communication between the internet browser and our website. the log icone in any website means that website is encrypted or secured.
+So in Certificate Manager console , click on Request certificate , then select Request a Public certificate . 
+Next, under Domain names we will enter 1st weblabskiem.ml  and 2nd  *.weblabskiem.ml
+Under select validation method, we will select DNS Validation. then click request.
+our request will show :status pending validation. In order to complete the validation  we will need to create a records set in route 53 to validate that the domain name belongs to us. so under create records in route 53 we will select or check weblabskiem.ml and 
+*.weblabskiem.ml to validate that the domain name belongs to us...then click create  records. then refresh the page we will see that the validation is successful completed.
+
+- launch a Bastion Host (ec2 instance)
+We will launch a bastion host on public-subnet-az1a in order to SSH into Private-subnets . 
+instance name= Bastion-Host( free tier option). Dev-vpc. public-sub-az1a. SSH-security-group then click launch. 
+
+- SSH into Instance in the Private Subnet 
+we will use putty.
+
 - Create an HTTPS Listener for the Application Load Balancer
+We will create an https listener for the Application Load Balancer to secure our website .
+in ec2 console , select load balancer then click on our Dev-ALB . GO to listeners tab and click on Add Listener then select protocol=https:443, default action= Forward to, Target Group= Dev-TG ... Default SSL certificate= From ACM to weblabskiem.ml. then add. 
+Once we created the HTTPS Listener , the first thing we do is to EDIT our HTTP Listener to redirect HTTP Traffic to HTTPS... So select http then click on edit. Under Default actions , click REMOVE. once we removed it . again under Default actions select REDIRECT. Then protocol=HTTPS port=443 then click save changes.
+TO make sure that our website is secured we will SSH into one of our ec2s (ec2-az1a or ec21b) on private-app-subnets on az1a or az1b.Once we are in one, we will sudo su- to get our root user. Then we will apply (nano/var/www/html/wp-config.php ) command to modifier the WP CONFIG FILE. 
+Once in nano text editor scroll down till " @package wordpress" then under "./"  UPLOAD or PAST this code:
+
+/* SSL Settings */
+define('FORCE_SSL_ADMIN', true);
+
+// Get true SSL status from AWS load balancer
+if(isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') {
+  $_SERVER['HTTPS'] = '1';
+}
+Then save it.
+Once this process is completed let's go to our website to see if our website is secured .so we will tape our domain name www.weblabskiem.ml with https. the next thing is to update our domain name in our wordpress settings(general) so we will tape https://www.weblabskiem.ml/wp-admin in the internet browser then enter our credentials. In our wordpress settings in general we will delete the unsecured url http://www.weblabskiem.ml and replace it with the secured url https://www.weblabskiem.ml then save changes. we will be automatically logged out .Once we are able to log in again that means our wordpress website is secured.
 - Create an Auto Scaling Group
 - Install WordPress Theme and Template
